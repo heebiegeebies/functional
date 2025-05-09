@@ -1,15 +1,14 @@
 package stream;
 
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
+import lombok.*;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.io.*;
+import java.net.URI;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -69,7 +68,7 @@ public class FileDownloadTest {
 
     @DisplayName("whenLazilyLoadedWithAnonymousClass_thenDoesNotThrows; ")
     @Test
-    void whenLazilyLoadedWithAnonymousClass_thenDoesNotThrows() {
+    void whenLazilyLoadedWithAnonymousClass_thenDoesNotThrowOOM() {
         Assertions.assertDoesNotThrow(() -> {
                     List<FileDto> fileDtos = getFileDtos();
 
@@ -87,6 +86,46 @@ public class FileDownloadTest {
                     }
                 }
         );
+
+    }
+
+    @Test
+    void whenLazilyLoadedWithAnonymousClass_thenDoesNotThrowOOM2() {
+
+        Assertions.assertDoesNotThrow(() -> {
+            String testFilename = "eager-allocation";
+            List<FileDto> fileDtos = getFileDtos(100, FileSizeUnit.MEGA_BYTE, testFilename);
+            createFile(testFilename, 10, FileSizeUnit.MEGA_BYTE);
+            List<Attachment> byteArraySupplierList = fileDtos.stream()
+                    .map(fileDto -> new Attachment(
+                                    fileDto.name(),
+                                    zos -> {
+                                        try (InputStream is = new FileInputStream(testFilename)) {
+                                            ZipEntry entry = new ZipEntry(fileDto.name());
+                                            zos.putNextEntry(entry);
+                                            byte[] buff = new byte[4096];
+                                            int len;
+                                            while ((len = is.read(buff)) != -1) {
+                                                zos.write(buff, 0, len);
+                                            }
+                                            zos.closeEntry();
+                                        } catch (Exception e) {
+                                            throw new RuntimeException(e);
+                                        }
+                                    }
+                            )
+                    )
+                    .toList();
+            new File("root.zip").deleteOnExit();
+            try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream("root.zip"))) {
+                for (Attachment attachment : byteArraySupplierList) {
+                    attachment.getContent().accept(zos);
+                }
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+
 
     }
 
@@ -114,6 +153,13 @@ public class FileDownloadTest {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    @RequiredArgsConstructor
+    @Getter
+    private static class Attachment {
+        private final String name;
+        private final Consumer<ZipOutputStream> content;
     }
 
     private static void createFile() {
